@@ -1,0 +1,240 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Toolshop multi-agent demo on Amazon Bedrock (Supervisor + 4 collaborators) using DRAFT via TSTALIASID.
+
+Parameters:
+  SessionTTLSeconds:
+    Type: Number
+    Default: 600
+    MinValue: 60
+    MaxValue: 3600
+    Description: Idle session TTL for agents
+  SupervisorModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Foundation model for the supervisor agent
+  SpecialistModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Foundation model for the specialist agents
+  BedrockRegion:
+    Type: String
+    Default: us-west-2
+    Description: Region where Bedrock agents/models run (template IAM ARNs assume this region)
+  SourceAccount:
+    Type: String
+    Default: "429276963313"
+    Description: Your AWS account ID (used in IAM trust/conditions)
+
+Resources:
+
+  ###########################################################################
+  # IAM: Service role used by all agents (supervisor & collaborators)
+  ###########################################################################
+  BedrockAgentsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub BedrockAgentsServiceRole-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref SourceAccount
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent/*
+      Policies:
+        - PolicyName: BedrockAgentsCore
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow invoking the Nova models we use in this demo (supervisor + specialists)
+              - Sid: AgentModelInvocationPermissions
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub arn:aws:bedrock:${BedrockRegion}::foundation-model/${SupervisorModelId}
+                  - !Sub arn:aws:bedrock:${BedrockRegion}::foundation-model/${SpecialistModelId}
+
+              # Multi-agent: allow the supervisor to resolve & invoke collaborator test aliases
+              - Sid: AmazonBedrockAgentMultiAgentsPolicy
+                Effect: Allow
+                Action:
+                  - bedrock:GetAgentAlias
+                  - bedrock:InvokeAgent
+                Resource:
+                  - !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/*/*
+
+      Tags:
+        - Key: Project
+          Value: toolshop-demo
+
+  ###########################################################################
+  # Collaborator Agents (Delivery, Plant, Electrical, Bob)
+  ###########################################################################
+
+  DeliveryAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub toolshop-delivery-${AWS::StackName}
+      AgentResourceRoleArn: !GetAtt BedrockAgentsServiceRole.Arn
+      FoundationModel: !Ref SpecialistModelId
+      IdleSessionTTLInSeconds: !Ref SessionTTLSeconds
+      AutoPrepare: true
+      Instruction: |
+        Role: Delivery Agent
+        Purpose: Quote and schedule delivery for bulky or numerous items.
+        Ask for: suburb/postcode, preferred AM/PM window, access constraints (stairs, unit, gate), contact number.
+        Rules:
+        - Flag two-person lift for any single item >25 kg or awkward dimensions.
+        - Call out stairs / no-lift situations for heavy items and request acknowledgement.
+        - If customer asks technical product questions, hand back to Customer Service (supervisor).
+        - Safety first; do not give technical/electrical advice.
+        Output:
+        - Eligibility & Window (1–2 lines)
+        - Requirements/Constraints (bullets)
+        - Provisional Quote (placeholder e.g., "From $45 local")
+        - Confirmation question to book.
+
+  PlantAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub toolshop-plant-${AWS::StackName}
+      AgentResourceRoleArn: !GetAtt BedrockAgentsServiceRole.Arn
+      FoundationModel: !Ref SpecialistModelId
+      IdleSessionTTLInSeconds: !Ref SessionTTLSeconds
+      AutoPrepare: true
+      Instruction: |
+        Role: Plant Agent (Gardening Specialist)
+        Purpose: Practical plant advice: spacing, soil prep, fertilizers, watering, light/frost, product suggestions.
+        Ask for: plant/variety, desired height/speed, sun exposure, soil type (clay/sandy/loam), climate concerns (frost/heat), quantity/length of hedge.
+        Defaults: For hedges, use 1 m centers when spacing is unknown (demo heuristic).
+        Rules:
+        - Keep product names generic (e.g., Potting mix, Slow-release fertilizer, Mulch).
+        - If lighting/irrigation/delivery come up, return to Customer Service to involve Electrical/Delivery.
+        - Escalate to Bob if constraints conflict.
+        Output:
+        - Plan (short steps)
+        - Product List (3–6 items with reasons)
+        - Ongoing Care (watering/fertilizer cadence)
+
+  ElectricalAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub toolshop-electrical-${AWS::StackName}
+      AgentResourceRoleArn: !GetAtt BedrockAgentsServiceRole.Arn
+      FoundationModel: !Ref SpecialistModelId
+      IdleSessionTTLInSeconds: !Ref SessionTTLSeconds
+      AutoPrepare: true
+      Instruction: |
+        Role: Electrical Agent (Sparky Specialist)
+        Purpose: High-level electrical guidance only: IP ratings, low-voltage vs mains, power requirements, accessory compatibility.
+        Ask for: indoor/outdoor, voltage, IP rating need, length of run, existing power source, region (for compliance).
+        Safety:
+        - Do NOT provide wiring instructions.
+        - In AU/NZ, remind: “Mains work must be performed by a licensed electrician.”
+        - Outdoor: suggest at least IP65 for exposed fittings; prefer low-voltage systems for DIY.
+        - If irrigation/wet zones/odd constraints arise, consult Bob.
+        Output:
+        - Recommendation (1–2 lines)
+        - Safety & Compliance (bullets)
+        - Shopping List (transformer, cable type/gauge, connectors, timer/smart plug if relevant)
+
+  BobAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub toolshop-bob-${AWS::StackName}
+      AgentResourceRoleArn: !GetAtt BedrockAgentsServiceRole.Arn
+      FoundationModel: !Ref SpecialistModelId
+      IdleSessionTTLInSeconds: !Ref SessionTTLSeconds
+      AutoPrepare: true
+      Instruction: |
+        Role: Bob (Old-Hand Generalist)
+        Purpose: Veteran fallback. Resolve edge cases, reconcile conflicting advice, add practical shop wisdom.
+        Rules:
+        - Only answer when another agent asks.
+        - Prefer simple “do/don’t” rules of thumb.
+        - Err on the side of safety and durability.
+        - If advice contradicts specialists, explain trade-offs plainly.
+        Output:
+        - Call (what to do & why)
+        - Gotchas (1–3 bullets)
+        - If risky, recommend pro help.
+
+  ###########################################################################
+  # Supervisor Agent (Customer Service) with Multi-Agent Collaboration
+  ###########################################################################
+
+  CustomerServiceAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Sub toolshop-supervisor-${AWS::StackName}
+      AgentResourceRoleArn: !GetAtt BedrockAgentsServiceRole.Arn
+      FoundationModel: !Ref SupervisorModelId
+      IdleSessionTTLInSeconds: !Ref SessionTTLSeconds
+      AutoPrepare: true
+      OrchestrationType: DEFAULT
+      AgentCollaboration: SUPERVISOR_ROUTER
+      AgentCollaborators:
+        - CollaboratorName: Delivery
+          RelayConversationHistory: TO_COLLABORATOR
+          CollaborationInstruction: >
+            Use for bulky orders, delivery windows, stairs/access constraints, and quotes.
+            Do not answer technical questions; hand back to supervisor.
+          AgentDescriptor:
+            AliasArn: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${DeliveryAgent.AgentId}/TSTALIASID
+        - CollaboratorName: Plant
+          RelayConversationHistory: TO_COLLABORATOR
+          CollaborationInstruction: >
+            Use for planting, hedges, spacing, soil prep, fertilizers, care schedules, and related shopping lists.
+          AgentDescriptor:
+            AliasArn: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${PlantAgent.AgentId}/TSTALIASID
+        - CollaboratorName: Electrical
+          RelayConversationHistory: TO_COLLABORATOR
+          CollaborationInstruction: >
+            Use for high-level electrical suitability: low-voltage vs mains, IP ratings, safety, accessories.
+          AgentDescriptor:
+            AliasArn: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${ElectricalAgent.AgentId}/TSTALIASID
+        - CollaboratorName: Bob
+          RelayConversationHistory: TO_COLLABORATOR
+          CollaborationInstruction: >
+            Call when specialists are unsure or advice conflicts; request simple decision + gotchas.
+          AgentDescriptor:
+            AliasArn: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${BobAgent.AgentId}/TSTALIASID
+      Instruction: |
+        Role: Customer Service (Supervisor/Router)
+        Purpose: First point of contact. Triage, ask up to 2 clarifying questions, route to specialists, stitch answers, and present a short final plan.
+        Routing:
+        - Plants/soil/fertilizer/hedges → Plant
+        - Electrical/safety/ratings/power needs → Electrical
+        - Bulky or many items → Delivery
+        - If specialists are unsure or conflict → Bob
+        Style: Friendly, practical, 2–5 sentence answers.
+        Output:
+        - Summary (1–2 lines)
+        - Recommendations (bullets)
+        - Next steps (who does what)
+        Rules:
+        - Keep questions minimal; prefer fast routing.
+        - Never give wiring instructions (defer to Electrical).
+        - In AU, keep the licensed electrician reminder short when mains is implicated.
+        - End with a single confirmation question.
+
+Outputs:
+  SupervisorAgentId:
+    Value: !GetAtt CustomerServiceAgent.AgentId
+  SupervisorTestAliasArn:
+    Value: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${CustomerServiceAgent.AgentId}/TSTALIASID
+  DeliveryTestAliasArn:
+    Value: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${DeliveryAgent.AgentId}/TSTALIASID
+  PlantTestAliasArn:
+    Value: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${PlantAgent.AgentId}/TSTALIASID
+  ElectricalTestAliasArn:
+    Value: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${ElectricalAgent.AgentId}/TSTALIASID
+  BobTestAliasArn:
+    Value: !Sub arn:aws:bedrock:${BedrockRegion}:${SourceAccount}:agent-alias/${BobAgent.AgentId}/TSTALIASID
