@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VLM Camera Demo</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>VLM Camera Demo</h1>
+    </header>
+    
+    <div class="container">
+        <div class="video-panel">
+            <video id="camera" autoplay playsinline></video>
+        </div>
+        
+        <div class="chat-panel">
+            <div id="messages" class="messages-container"></div>
+            <div class="input-area">
+                <input type="text" id="message-input" placeholder="Ask about what you see..." />
+                <button id="send-button">Send</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/static/app.js"></script>
+</body>
+</html>
