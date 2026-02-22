@@ -1,0 +1,382 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Complete Lex V2 bot with Bedrock Knowledge Base and S3 Vectors integration
+
+Parameters:
+  CompanyName:
+    Type: String
+    Default: Wombat Tools
+    Description: Name of the company (used in bot responses and resource naming)
+  
+  BotName:
+    Type: String
+    Default: wombat-tools-lex
+    Description: Name of the Lex bot (lowercase with hyphens)
+  
+  LexLocaleId:
+    Type: String
+    Default: en_US
+    Description: Locale ID for the bot
+    AllowedValues:
+      - en_AU
+      - en_US
+      - en_GB
+  
+  VoiceId:
+    Type: String
+    Default: Joanna
+    Description: Amazon Polly voice ID for the bot
+    AllowedValues:
+      - Joanna
+      - Matthew
+      - Amy
+      - Brian
+      - Emma
+      - Olivia
+  
+  BedrockModelArn:
+    Type: String
+    Default: arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-3-haiku-20240307-v1:0
+    Description: Bedrock model ARN for QnA intent (Claude 3 Haiku recommended)
+  
+  EmbeddingModelArn:
+    Type: String
+    Default: arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.titan-embed-text-v2:0
+    Description: Bedrock embedding model ARN for knowledge base
+  
+  KnowledgeBaseName:
+    Type: String
+    Default: wombat-tools-knowledge-base
+    Description: Name for the Bedrock Knowledge Base
+  
+  DataSourceName:
+    Type: String
+    Default: wombat-tools-s3-data-source
+    Description: Name for the S3 data source
+
+Resources:
+  # S3 Bucket for Knowledge Base documents
+  KnowledgeBaseBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${BotName}-kb-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Company
+          Value: !Ref CompanyName
+        - Key: Purpose
+          Value: KnowledgeBase
+
+  # S3 Vector Bucket for embeddings
+  VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    Properties:
+      VectorBucketName: !Sub '${BotName}-vec-${AWS::AccountId}'
+
+  # Vector Index for similarity search
+  VectorIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+      IndexName: bedrock-kb-index
+      DataType: float32
+      Dimension: 1024
+      DistanceMetric: cosine
+
+  # IAM Role for Bedrock Knowledge Base
+  BedrockKnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${BotName}-bedrock-kb-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*'
+      Policies:
+        - PolicyName: BedrockModelAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:ListFoundationModels
+                  - bedrock:ListCustomModels
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Ref EmbeddingModelArn
+        - PolicyName: S3DataSourceAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3ListBucketStatement
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt KnowledgeBaseBucket.Arn
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+              - Sid: S3GetObjectStatement
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${KnowledgeBaseBucket.Arn}/*'
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount: !Ref AWS::AccountId
+        - PolicyName: S3VectorsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3vectors:GetVectorBucket
+                  - s3vectors:GetIndex
+                  - s3vectors:PutVectors
+                  - s3vectors:GetVectors
+                  - s3vectors:DeleteVectors
+                  - s3vectors:QueryVectors
+                  - s3vectors:ListVectors
+                Resource:
+                  - !GetAtt VectorBucket.VectorBucketArn
+                  - !GetAtt VectorIndex.IndexArn
+
+  # Bedrock Knowledge Base
+  BedrockKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Properties:
+      Name: !Ref KnowledgeBaseName
+      Description: !Sub 'Knowledge base for ${CompanyName}'
+      RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Ref EmbeddingModelArn
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+          IndexArn: !GetAtt VectorIndex.IndexArn
+      Tags:
+        Company: !Ref CompanyName
+
+  # Bedrock Data Source
+  BedrockDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: !Ref DataSourceName
+      Description: !Sub 'S3 data source for ${CompanyName} knowledge base'
+      KnowledgeBaseId: !Ref BedrockKnowledgeBase
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt KnowledgeBaseBucket.Arn
+
+  # IAM Role for Lex Bot
+  LexBotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${BotName}-lex-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lexv2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LexBotRuntimePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - polly:SynthesizeSpeech
+                  - comprehend:DetectSentiment
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Ref BedrockModelArn
+                  - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*'
+              - Effect: Allow
+                Action:
+                  - bedrock:Retrieve
+                  - bedrock:RetrieveAndGenerate
+                Resource: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+
+  # Lex Bot
+  LexBot:
+    Type: AWS::Lex::Bot
+    DependsOn: 
+      - LexBotRole
+      - BedrockKnowledgeBase
+    Properties:
+      Name: !Ref BotName
+      RoleArn: !GetAtt LexBotRole.Arn
+      DataPrivacy:
+        ChildDirected: false
+      IdleSessionTTLInSeconds: 300
+      Description: !Sub '${CompanyName} customer service bot with Bedrock KB integration'
+      AutoBuildBotLocales: true
+      BotTags:
+        - Key: Company
+          Value: !Ref CompanyName
+      BotLocales:
+        - LocaleId: !Ref LexLocaleId
+          Description: !Sub '${CompanyName} bot locale'
+          NluConfidenceThreshold: 0.40
+          VoiceSettings:
+            VoiceId: !Ref VoiceId
+          Intents:
+            - Name: GreetingIntent
+              Description: Greet the customer
+              SampleUtterances:
+                - Utterance: hello
+                - Utterance: hi
+                - Utterance: good morning
+                - Utterance: good afternoon
+                - Utterance: hey
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: !Sub 'Hi! Welcome to ${CompanyName}. How can I help you today?'
+            
+            - Name: CustomerQnAIntent
+              Description: Answer customer questions using Bedrock Knowledge Base
+              ParentIntentSignature: AMAZON.QnAIntent
+              QnAIntentConfiguration:
+                BedrockModelConfiguration:
+                  ModelArn: !Ref BedrockModelArn
+                DataSourceConfiguration:
+                  BedrockKnowledgeStoreConfiguration:
+                    BedrockKnowledgeBaseArn: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+                    ExactResponse: false
+            
+            - Name: HangUpIntent
+              Description: End the conversation
+              SampleUtterances:
+                - Utterance: goodbye
+                - Utterance: bye
+                - Utterance: hang up
+                - Utterance: that's all
+                - Utterance: thanks bye
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: Thanks for calling. Goodbye.
+            
+            - Name: FallbackIntent
+              Description: Default fallback intent
+              ParentIntentSignature: AMAZON.FallbackIntent
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: Sorry — I didn't catch that. Could you rephrase?
+
+  # Bot Version
+  BotVersion:
+    Type: AWS::Lex::BotVersion
+    DependsOn: LexBot
+    Properties:
+      BotId: !Ref LexBot
+      BotVersionLocaleSpecification:
+        - LocaleId: !Ref LexLocaleId
+          BotVersionLocaleDetails:
+            SourceBotVersion: DRAFT
+      Description: !Sub 'Version 1 of ${CompanyName} bot'
+
+  # Bot Alias
+  BotAlias:
+    Type: AWS::Lex::BotAlias
+    DependsOn: BotVersion
+    Properties:
+      BotId: !Ref LexBot
+      BotAliasName: Production
+      BotVersion: !GetAtt BotVersion.BotVersion
+      BotAliasLocaleSettings:
+        - LocaleId: !Ref LexLocaleId
+          BotAliasLocaleSetting:
+            Enabled: true
+
+Outputs:
+  # S3 and Vector Storage Outputs
+  KnowledgeBaseBucketName:
+    Description: Name of the S3 bucket for knowledge base documents
+    Value: !Ref KnowledgeBaseBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseBucket'
+  
+  KnowledgeBaseBucketArn:
+    Description: ARN of the S3 bucket
+    Value: !GetAtt KnowledgeBaseBucket.Arn
+  
+  VectorBucketName:
+    Description: Name of the S3 Vector bucket
+    Value: !Ref VectorBucket
+  
+  VectorBucketArn:
+    Description: ARN of the S3 Vector bucket
+    Value: !GetAtt VectorBucket.VectorBucketArn
+  
+  VectorIndexArn:
+    Description: ARN of the S3 Vector index
+    Value: !GetAtt VectorIndex.IndexArn
+  
+  # Bedrock Knowledge Base Outputs
+  KnowledgeBaseId:
+    Description: ID of the Bedrock Knowledge Base
+    Value: !Ref BedrockKnowledgeBase
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseId'
+  
+  KnowledgeBaseArn:
+    Description: ARN of the Bedrock Knowledge Base
+    Value: !GetAtt BedrockKnowledgeBase.KnowledgeBaseArn
+  
+  DataSourceId:
+    Description: ID of the Bedrock Data Source
+    Value: !GetAtt BedrockDataSource.DataSourceId
+  
+  # Lex Bot Outputs
+  LexBotId:
+    Description: ID of the Lex bot
+    Value: !Ref LexBot
+    Export:
+      Name: !Sub '${AWS::StackName}-LexBotId'
+  
+  LexBotAliasId:
+    Description: ID of the Lex bot alias
+    Value: !GetAtt BotAlias.BotAliasId
+  
+  LexBotName:
+    Description: Name of the Lex bot
+    Value: !Ref BotName
+  
+
