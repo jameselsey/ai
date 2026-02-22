@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wombat Tools - Quality Tools for Every Job</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="container">
+            <div class="logo">🔨 Wombat Tools</div>
+            <nav>
+                <a href="#products">Products</a>
+                <a href="#about">About</a>
+                <a href="#contact">Contact</a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <h1>Quality Tools for Every Job</h1>
+            <p>Professional-grade tools trusted by craftspeople worldwide</p>
+            <button class="cta-button">Shop Now</button>
+        </div>
+    </section>
+
+    <!-- Products Section -->
+    <section id="products" class="products">
+        <div class="container">
+            <h2>Our Products</h2>
+            <div class="product-grid">
+                <div class="product-card">
+                    <div class="product-image">🔨</div>
+                    <h3>Professional Hammer</h3>
+                    <p>Durable steel construction with ergonomic grip</p>
+                    <div class="price">$29.99</div>
+                    <button class="buy-button">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div class="product-image">🔧</div>
+                    <h3>Screwdriver Set</h3>
+                    <p>12-piece precision screwdriver set</p>
+                    <div class="price">$39.99</div>
+                    <button class="buy-button">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div class="product-image">🔩</div>
+                    <h3>Adjustable Wrench</h3>
+                    <p>Heavy-duty adjustable wrench, 12-inch</p>
+                    <div class="price">$24.99</div>
+                    <button class="buy-button">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div class="product-image">⚡</div>
+                    <h3>Power Drill</h3>
+                    <p>Cordless 20V power drill with battery</p>
+                    <div class="price">$89.99</div>
+                    <button class="buy-button">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div class="product-image">📏</div>
+                    <h3>Measuring Tape</h3>
+                    <p>25-foot retractable measuring tape</p>
+                    <div class="price">$14.99</div>
+                    <button class="buy-button">Add to Cart</button>
+                </div>
+                <div class="product-card">
+                    <div class="product-image">🪚</div>
+                    <h3>Hand Saw</h3>
+                    <p>Professional-grade hand saw with comfort grip</p>
+                    <div class="price">$34.99</div>
+                    <button class="buy-button">Add to Cart</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section id="about" class="about">
+        <div class="container">
+            <h2>About Wombat Tools</h2>
+            <p>For over 20 years, Wombat Tools has been providing quality tools to professionals and DIY enthusiasts. Our commitment to excellence and customer satisfaction has made us a trusted name in the industry.</p>
+            <p>Need help choosing the right tool? Chat with our AI assistant!</p>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer id="contact">
+        <div class="container">
+            <p>&copy; 2024 Wombat Tools. All rights reserved.</p>
+            <p>Contact: info@wombattools.com | 1-800-WOMBAT</p>
+        </div>
+    </footer>
+
+    <!-- Chat Button -->
+    <button id="chatButton" class="chat-button">💬</button>
+
+    <!-- Chat Widget -->
+    <div id="chatWidget" class="chat-widget">
+        <div class="chat-header">
+            <span>Wombat Tools Assistant</span>
+            <button id="closeChat" class="close-button">×</button>
+        </div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-status" id="chatStatus"></div>
+        <div class="chat-input">
+            <input type="text" id="messageInput" placeholder="Ask about our products...">
+            <button id="sendButton">Send</button>
+        </div>
+    </div>
+
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1000.0.min.js"></script>
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
